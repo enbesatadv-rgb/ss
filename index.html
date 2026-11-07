@@ -746,6 +746,7 @@ function startNet(){
   p.on('error',e=>{
     if(my!==gen)return;
     if(e.type==='webrtc')toast('فشل اتصال WebRTC بين الجهازين');
+    if(e.type==='peer-unavailable'){const m=/peer\s+(\S+)/.exec(e.message||'');const id=m&&m[1];chats.forEach(c=>{if(uidOf(c.key)===id)c._unavail=true})}
     if(e.type==='unavailable-id'){
       if(++nameTry<=4){setNet('wait','جارٍ الاتصال…');restartNet(3500)}
       else{setNet('err','الاسم مستخدم');toast('اسم المستخدم مستخدم حاليًا في جلسة أخرى')}
@@ -758,6 +759,7 @@ function connectTo(ch){
   const ex=links.get(ch.key);
   if(ex&&(ex.open||(ex._pending&&Date.now()-ex._t<25000)))return;
   if(ex){try{ex.close()}catch(e){}links.delete(ch.key)}
+  ch._unavail=false;
   let c;try{c=peer.connect(uidOf(ch.key),{reliable:true})}catch(e){return}
   c._out=true;c._pending=true;c._t=Date.now();links.set(ch.key,c);watchIce(c);
   c.on('open',()=>{
@@ -932,7 +934,7 @@ async function startNewChat(){
   if(ex){if(ex.state==='ok'){curChat=ex;go('chat')}else toast('الطلب قيد الانتظار');return}
   const ch={key,name:raw,id:randId(),state:'out',last:'',lastTs:Date.now(),unread:0};
   chats.push(ch);await DB.putChat(ch);renderList();toast('جارٍ إرسال الطلب…');connectTo(ch);
-  setTimeout(()=>{if(chats.includes(ch)&&ch.state==='out'&&!(links.get(key)&&links.get(key).open))toast('صديقك غير متصل الآن — سيصله الطلب تلقائيًا عند ظهوره')},9000);
+  setTimeout(()=>{if(chats.includes(ch)&&ch.state==='out'&&!(links.get(key)&&links.get(key).open))toast(ch._unavail?'صديقك غير متصل الآن — سيصله الطلب تلقائيًا عند ظهوره':'صديقك ظاهر، لكن الاتصال بين الشبكتين لم يكتمل — محتاج خادم TURN (من ⋮ ← إعدادات الاتصال)')},18000);
 }
 $('#nGo').onclick=startNewChat;
 $('#nName').addEventListener('keydown',e=>{if(e.key==='Enter')startNewChat()});
@@ -940,12 +942,19 @@ $('#nName').addEventListener('keydown',e=>{if(e.key==='Enter')startNewChat()});
 $('#bMenu').onclick=()=>{$('#mmName').textContent=me?me.name:'';$('#mmUnblock').hidden=!blocked.length;openM('#mMenu')};
 $('#mmClose').onclick=()=>closeM('#mMenu');
 $('#mmIce').onclick=()=>{closeM('#mMenu');let v='';try{v=localStorage.getItem('ruqa.ice')||''}catch(e){}$('#iceTxt').value=v;openM('#mIce')};
+function parseIce(v){
+  v=String(v);const i=v.indexOf('['),j=v.lastIndexOf(']');if(i<0||j<i)return null;v=v.slice(i,j+1);
+  const alt=v.replace(/([{,]\s*)([A-Za-z_]\w*)\s*:/g,'$1"$2":').replace(/'/g,'"').replace(/,\s*([\]}])/g,'$1');
+  for(const t of [v,alt]){try{const x=JSON.parse(t);if(Array.isArray(x)&&x.length&&x.every(i=>i&&i.urls))return x}catch(e){}}
+  return null;
+}
 $('#iceClose').onclick=()=>closeM('#mIce');
 $('#iceClear').onclick=()=>{try{localStorage.removeItem('ruqa.ice')}catch(e){}$('#iceTxt').value='';closeM('#mIce');toast('تم المسح');restartNet(300)};
 $('#iceSave').onclick=()=>{
-  let v=$('#iceTxt').value.trim();
-  try{const a=JSON.parse(v);if(!Array.isArray(a)||!a.length||!a.every(x=>x&&x.urls))throw 0;localStorage.setItem('ruqa.ice',JSON.stringify(a))}
-  catch(e){toast('الصيغة غير صحيحة. يجب أن تكون قائمة JSON');return}
+  const a=parseIce($('#iceTxt').value);
+  if(!a){toast('الصيغة غير صحيحة. الصق القائمة كما نسختها من Metered');return}
+  if(JSON.stringify(a).includes('<PASSWORD>')||JSON.stringify(a).includes('PASSWORD>')){toast('القائمة فيها <PASSWORD> بدل الباسورد الحقيقي. انسخها بزر ICE من الجدول');return}
+  try{localStorage.setItem('ruqa.ice',JSON.stringify(a))}catch(e){}
   closeM('#mIce');toast('تم الحفظ، جارٍ إعادة الاتصال…');restartNet(300);
 };
 $('#mmLock').onclick=()=>{closeM('#mMenu');goBack('settings')};
@@ -1019,7 +1028,7 @@ function sendable(){
   const ch=curChat;if(!ch)return null;
   const c=links.get(ch.key);
   if(ch.state==='ok'&&c&&c.open&&c._ready)return c;
-  toast('صديقك غير متصل الآن — لا يمكن الإرسال');return null;
+  toast(ch._unavail===false?'الاتصال بصديقك لم يكتمل بعد — تأكد أن الطرفين فاتحين التطبيق':'صديقك غير متصل الآن — لا يمكن الإرسال');return null;
 }
 async function mine(ch,m){
   m.mine=true;m.ts=Date.now();m.chat=ch.key;
