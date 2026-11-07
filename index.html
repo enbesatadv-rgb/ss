@@ -407,6 +407,7 @@ input,textarea{font-family:inherit;color:inherit;-webkit-user-select:text;user-s
   <p style="font-size:13.5px;line-height:1.8">لو الاتصال بين شبكتين مختلفتين لا يعمل، الصق هنا بيانات خادم TURN الخاص بك بصيغة JSON (مثال في الأسفل). يجب أن يضعها الطرفان.</p>
   <textarea id="iceTxt" class="field" style="height:130px;padding:12px;font-size:12.5px;text-align:left;direction:ltr;font-family:monospace;resize:none" placeholder='[{"urls":"turn:host:443","username":"user","credential":"pass"}]'></textarea>
   <button class="btn primary sm" style="margin-top:12px" id="iceSave">حفظ وإعادة الاتصال</button>
+  <button class="btn sm" style="margin-top:10px" id="iceShare">نسخ كود للصديق</button>
   <button class="btn sm" style="margin-top:10px" id="iceTest">اختبار الاتصال</button>
   <pre id="diagOut" style="display:none;margin-top:10px;text-align:start;direction:rtl;white-space:pre-wrap;font-family:inherit;font-size:13.5px;line-height:1.9;background:rgba(0,0,0,.25);border-radius:14px;padding:10px 12px;-webkit-user-select:text;user-select:text"></pre>
   <button class="btn sm" style="margin-top:10px" id="iceClear">مسح</button>
@@ -945,7 +946,14 @@ $('#nName').addEventListener('keydown',e=>{if(e.key==='Enter')startNewChat()});
 $('#bMenu').onclick=()=>{$('#mmName').textContent=me?me.name:'';$('#mmUnblock').hidden=!blocked.length;openM('#mMenu')};
 $('#mmClose').onclick=()=>closeM('#mMenu');
 $('#mmIce').onclick=()=>{closeM('#mMenu');let v='';try{v=localStorage.getItem('ruqa.ice')||''}catch(e){}$('#iceTxt').value=v;openM('#mIce')};
+const b64e=t=>btoa(String.fromCharCode(...new TextEncoder().encode(t))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const b64d=t=>{t=t.replace(/-/g,'+').replace(/_/g,'/');while(t.length%4)t+='=';return new TextDecoder().decode(Uint8Array.from(atob(t),c=>c.charCodeAt(0)))};
+function iceFromCode(v){
+  const m=/RQ1\.([A-Za-z0-9_-]+)/.exec(String(v));if(!m)return null;
+  try{const x=JSON.parse(b64d(m[1]));return Array.isArray(x)&&x.length&&x.every(k=>k&&k.urls)?x:null}catch(e){return null}
+}
 function parseIce(v){
+  const c=iceFromCode(v);if(c)return c;
   v=String(v).replace(/[“”„‟«»]/g,'"').replace(/[‘’‚‛]/g,"'").replace(/[ ​‎‏ ]/g,' ');
   const i=v.indexOf('['),j=v.lastIndexOf(']');
   if(i>=0&&j>i){
@@ -964,6 +972,13 @@ function parseIce(v){
   return out.length?out:null;
 }
 $('#iceClose').onclick=()=>closeM('#mIce');
+$('#iceShare').onclick=async()=>{
+  let a=customIce();if(!a.length)a=parseIce($('#iceTxt').value)||[];
+  if(!a.length){toast('احفظ بيانات Metered أولًا ثم اضغط هذا الزر');return}
+  const code='RQ1.'+b64e(JSON.stringify(a)),t=$('#iceTxt');
+  try{await navigator.clipboard.writeText(code);toast('تم نسخ الكود ✓ أرسله لصديقك');return}catch(e){}
+  t.value=code;t.focus();t.select();toast('انسخ الكود من الخانة وأرسله لصديقك');
+};
 function testSignaling(){
   return new Promise(res=>{
     let done=false,ws;const fin=r=>{if(done)return;done=true;try{ws&&ws.close()}catch(e){}res(r)};
