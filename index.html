@@ -407,6 +407,8 @@ input,textarea{font-family:inherit;color:inherit;-webkit-user-select:text;user-s
   <p style="font-size:13.5px;line-height:1.8">لو الاتصال بين شبكتين مختلفتين لا يعمل، الصق هنا بيانات خادم TURN الخاص بك بصيغة JSON (مثال في الأسفل). يجب أن يضعها الطرفان.</p>
   <textarea id="iceTxt" class="field" style="height:130px;padding:12px;font-size:12.5px;text-align:left;direction:ltr;font-family:monospace;resize:none" placeholder='[{"urls":"turn:host:443","username":"user","credential":"pass"}]'></textarea>
   <button class="btn primary sm" style="margin-top:12px" id="iceSave">حفظ وإعادة الاتصال</button>
+  <button class="btn sm" style="margin-top:10px" id="iceTest">اختبار الاتصال</button>
+  <pre id="diagOut" style="display:none;margin-top:10px;text-align:start;direction:rtl;white-space:pre-wrap;font-family:inherit;font-size:13.5px;line-height:1.9;background:rgba(0,0,0,.25);border-radius:14px;padding:10px 12px;-webkit-user-select:text;user-select:text"></pre>
   <button class="btn sm" style="margin-top:10px" id="iceClear">مسح</button>
   <button class="btn sm" style="margin-top:10px" id="iceClose">إغلاق</button>
 </div></div>
@@ -725,6 +727,7 @@ function teardown(){
 }
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){hiddenAt=Date.now();return}
+  if(peer&&peer.disconnected&&!peer.destroyed&&unlocked)try{peer.reconnect()}catch(e){}
   if(hiddenAt&&SECRET.includes(cur)&&Date.now()-hiddenAt>45000){teardown();history.replaceState({s:'lock',d:depth},'');render('lock');toast('تم قفل الغرفة تلقائيًا')}
   hiddenAt=0;
 });
@@ -740,9 +743,9 @@ function startNet(){
   if(typeof Peer==='undefined'){setNet('err','يلزم اتصال بالإنترنت');return}
   const my=++gen;setNet('wait','جارٍ الاتصال…');
   const p=peer=new Peer(uidOf(me.key),{debug:1,config:iceConfig()});
-  p.on('open',()=>{if(my!==gen)return;nameTry=0;setNet('on','متصل');connectAll();clearInterval(retryT);retryT=setInterval(connectAll,12000)});
+  p.on('open',()=>{if(my!==gen)return;nameTry=0;setNet('on','متصل');connectAll();clearInterval(retryT);retryT=setInterval(()=>{if(peer&&peer.disconnected&&!peer.destroyed)try{peer.reconnect()}catch(e){}connectAll()},12000)});
   p.on('connection',c=>{if(my===gen)onIncoming(c)});
-  p.on('disconnected',()=>{if(my===gen){setNet('wait','انقطع الاتصال…');try{p.reconnect()}catch(e){}}});
+  p.on('disconnected',()=>{if(my===gen){setNet('wait','انقطع الاتصال…');setTimeout(()=>{if(my===gen&&p.disconnected&&!p.destroyed)try{p.reconnect()}catch(e){}},1500)}});
   p.on('error',e=>{
     if(my!==gen)return;
     if(e.type==='webrtc')toast('فشل اتصال WebRTC بين الجهازين');
@@ -943,12 +946,57 @@ $('#bMenu').onclick=()=>{$('#mmName').textContent=me?me.name:'';$('#mmUnblock').
 $('#mmClose').onclick=()=>closeM('#mMenu');
 $('#mmIce').onclick=()=>{closeM('#mMenu');let v='';try{v=localStorage.getItem('ruqa.ice')||''}catch(e){}$('#iceTxt').value=v;openM('#mIce')};
 function parseIce(v){
-  v=String(v);const i=v.indexOf('['),j=v.lastIndexOf(']');if(i<0||j<i)return null;v=v.slice(i,j+1);
-  const alt=v.replace(/([{,]\s*)([A-Za-z_]\w*)\s*:/g,'$1"$2":').replace(/'/g,'"').replace(/,\s*([\]}])/g,'$1');
-  for(const t of [v,alt]){try{const x=JSON.parse(t);if(Array.isArray(x)&&x.length&&x.every(i=>i&&i.urls))return x}catch(e){}}
-  return null;
+  v=String(v).replace(/[“”„‟«»]/g,'"').replace(/[‘’‚‛]/g,"'").replace(/[ ​‎‏ ]/g,' ');
+  const i=v.indexOf('['),j=v.lastIndexOf(']');
+  if(i>=0&&j>i){
+    const w=v.slice(i,j+1);
+    const alt=w.replace(/([{,]\s*)([A-Za-z_]\w*)\s*:/g,'$1"$2":').replace(/'/g,'"').replace(/,\s*([\]}])/g,'$1');
+    for(const t of [w,alt]){try{const x=JSON.parse(t);if(Array.isArray(x)&&x.length&&x.every(k=>k&&k.urls))return x}catch(e){}}
+  }
+  const out=[],re=/\{[^{}]*\}/g;let m;
+  while((m=re.exec(v))){
+    const b=m[0],u=/urls?["']?\s*:\s*(\[[^\]]*\]|["'][^"']*["'])/.exec(b);if(!u)continue;
+    const urls=u[1].match(/(?:stun|turns?):[^"'\s,\]]+/g)||[];if(!urls.length)continue;
+    const e={urls:urls.length===1?urls[0]:urls};
+    const n=/username["']?\s*:\s*["']([^"']*)["']/.exec(b),c=/credential["']?\s*:\s*["']([^"']*)["']/.exec(b);
+    if(n)e.username=n[1];if(c)e.credential=c[1];out.push(e);
+  }
+  return out.length?out:null;
 }
 $('#iceClose').onclick=()=>closeM('#mIce');
+function testSignaling(){
+  return new Promise(res=>{
+    let done=false,ws;const fin=r=>{if(done)return;done=true;try{ws&&ws.close()}catch(e){}res(r)};
+    try{ws=new WebSocket('wss://0.peerjs.com:443/peerjs?key=peerjs&id=diag'+randId().slice(0,10)+'&token='+randId().slice(0,10))}catch(e){return res('فشل ✗')}
+    ws.onmessage=()=>fin('يعمل ✓');
+    ws.onopen=()=>setTimeout(()=>fin('يعمل ✓'),1500);
+    ws.onerror=()=>fin('محظور أو لا يعمل ✗');
+    ws.onclose=()=>fin('أُغلق فورًا ✗');
+    setTimeout(()=>fin('انتهت المهلة ✗'),9000);
+  });
+}
+function testRelay(){
+  return new Promise(res=>{
+    let pc,got=false;
+    const fin=r=>{try{pc&&pc.close()}catch(e){}res(r)};
+    try{pc=new RTCPeerConnection({iceServers:iceConfig().iceServers,iceTransportPolicy:'relay'})}catch(e){return res('المتصفح لا يدعم ✗')}
+    pc.onicecandidate=e=>{if(e.candidate&&/ typ relay /.test(e.candidate.candidate)&&!got){got=true;fin('يعمل ✓')}};
+    pc.createDataChannel('d');pc.createOffer().then(o=>pc.setLocalDescription(o)).catch(()=>fin('فشل ✗'));
+    setTimeout(()=>fin('لا يعمل ✗'),10000);
+  });
+}
+$('#iceTest').onclick=async()=>{
+  const out=$('#diagOut');out.style.display='block';const L=[];const show=()=>{out.textContent=L.join('\n')};
+  L.push('الإنترنت: '+(navigator.onLine?'متصل ✓':'غير متصل ✗'));
+  L.push('بيانات Metered المحفوظة: '+(customIce().length?'موجودة ✓':'غير موجودة ✗'));
+  L.push('حالة الاتصال الحالية بالخادم: '+(peer&&peer.open?'متصل ✓':peer&&peer.disconnected?'منقطع ✗':'غير مبدوء'));
+  L.push('جارٍ اختبار خادم التعارف…');show();
+  const a=await testSignaling();L[L.length-1]='خادم التعارف (PeerJS): '+a;L.push('جارٍ اختبار الخادم الوسيط (TURN)…');show();
+  const b=await testRelay();L[L.length-1]='الخادم الوسيط (TURN): '+b;
+  L.push('');
+  L.push(a.includes('✓')?(b.includes('✓')?'النتيجة: كل شيء سليم من هذا الجهاز.':'النتيجة: خادم التعارف يعمل لكن الخادم الوسيط لا يعمل. تأكد من بيانات Metered.'):'النتيجة: هذه الشبكة تمنع خادم التعارف. جرّب شبكة أخرى (واي فاي).');
+  show();
+};
 $('#iceClear').onclick=()=>{try{localStorage.removeItem('ruqa.ice')}catch(e){}$('#iceTxt').value='';closeM('#mIce');toast('تم المسح');restartNet(300)};
 $('#iceSave').onclick=()=>{
   const a=parseIce($('#iceTxt').value);
